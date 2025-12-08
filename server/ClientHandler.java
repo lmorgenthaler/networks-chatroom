@@ -57,14 +57,18 @@ public class ClientHandler implements Runnable {
                         handleMessage(message);
                     } else if (message.key.equals(ChatKLV.KEY_READ)) {
                         handleRead();
+                    } else if (message.key.equals(ChatKLV.KEY_EXIT)) {
+                        handleExit(message);
+                        break; // Exit after handling EXIT
                     } else {
-                        // Other message types will be handled in later phases
+                        // Other message types
                         System.out.println("[Client " + clientId + "] Unhandled message type: " + message.key);
                     }
                 } catch (IOException e) {
                     if (!socket.isClosed()) {
                         System.err.println("[Client " + clientId + "] Read error: " + e.getMessage());
-                        e.printStackTrace();
+                        // Connection lost - handle as abrupt disconnect
+                        handleAbruptDisconnect();
                     }
                     break; // Connection lost
                 } catch (Exception e) {
@@ -251,6 +255,34 @@ public class ClientHandler implements Runnable {
             messages.size() + " messages)");
     }
 
+    private void handleExit(ChatKLV.KLVMessage message) throws Exception {
+        // Parse username from EXIT message
+        String exitUsername = new String(message.value, StandardCharsets.UTF_8).trim();
+        
+        // Send success response to exiting client
+        sendSuccessResponse();
+        
+        // Mark as cleaned up to prevent double cleanup
+        String exitingUsername = username;
+        username = null; // Clear username to prevent cleanup() from broadcasting again
+        
+        // Remove client from broadcast manager before broadcasting
+        // (so they don't receive their own EXIT broadcast)
+        server.getBroadcastManager().removeClient(this);
+        
+        // Remove username from active usernames set
+        if (exitingUsername != null) {
+            server.getActiveUsernames().remove(exitingUsername);
+        }
+        
+        // Broadcast EXIT to all remaining clients
+        byte[] exitBroadcast = ChatKLV.encodeKLV(ChatKLV.KEY_EXIT, 
+            exitUsername.getBytes(StandardCharsets.UTF_8));
+        server.getBroadcastManager().broadcastToAll(exitBroadcast);
+        
+        System.out.println("[Client " + clientId + "] User '" + exitUsername + "' exited");
+    }
+
     private void sendSuccessResponse() throws Exception {
         // RESP:11:CODE:3:200
         byte[] codeValue = "200".getBytes(StandardCharsets.US_ASCII);
@@ -296,11 +328,37 @@ public class ClientHandler implements Runnable {
         output.flush();
     }
 
-    private void cleanup() {
-        // Remove from broadcast manager
+    /**
+     * Handle abrupt disconnection (client closed without sending EXIT).
+     * Broadcasts EXIT to remaining clients and cleans up.
+     */
+    private void handleAbruptDisconnect() {
         if (username != null) {
+            // Remove from broadcast manager first
             server.getBroadcastManager().removeClient(this);
+            
+            // Broadcast EXIT to remaining clients
+            try {
+                byte[] exitBroadcast = ChatKLV.encodeKLV(ChatKLV.KEY_EXIT, 
+                    username.getBytes(StandardCharsets.UTF_8));
+                server.getBroadcastManager().broadcastToAll(exitBroadcast);
+            } catch (Exception e) {
+                System.err.println("[Client " + clientId + "] Error broadcasting EXIT: " + e.getMessage());
+            }
+            
+            // Remove username from active usernames
             server.getActiveUsernames().remove(username);
+        }
+    }
+
+    private void cleanup() {
+        // Capture username for logging before cleanup
+        String loggedUsername = username;
+        
+        // If username is still set, this is an abrupt disconnect (not handled by handleExit)
+        // handleExit() clears username, so if it's still set, we need to handle abrupt disconnect
+        if (username != null) {
+            handleAbruptDisconnect();
         }
         
         try {
@@ -310,7 +368,12 @@ public class ClientHandler implements Runnable {
         } catch (IOException e) {
             // Ignore
         }
-        System.out.println("[Client " + clientId + "] Disconnected" + 
-            (username != null ? " (user: " + username + ")" : ""));
+        
+        // Log disconnection
+        if (loggedUsername != null) {
+            System.out.println("[Client " + clientId + "] Disconnected (user: " + loggedUsername + ")");
+        } else {
+            System.out.println("[Client " + clientId + "] Disconnected");
+        }
     }
 }
