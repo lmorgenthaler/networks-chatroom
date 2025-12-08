@@ -94,7 +94,7 @@ public class ChatKLV {
      * @param offset Starting position in the data array
      * @return Decoded KLV message
      */
-    private static KLVMessage decodeKLV(byte[] data, int offset) throws Exception {
+    public static KLVMessage decodeKLV(byte[] data, int offset) throws Exception {
         if (data.length - offset < 8) {
             throw new IllegalArgumentException(
                 "Data too short for KLV structure (need at least 8 bytes)");

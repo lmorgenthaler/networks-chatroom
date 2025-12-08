@@ -8,6 +8,9 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicInteger;
 
+import server.db.SQLiteMessageStore;
+
+
 public class ChatServer {
     private final int port;
     private ServerSocket serverSocket;
@@ -16,6 +19,7 @@ public class ChatServer {
     private final ExecutorService executor;
     private final ConcurrentHashMap<String, Boolean> activeUsernames;
     private final BroadcastManager broadcastManager;
+    private SQLiteMessageStore messageStore;
 
     public ChatServer(int port) {
         this.port = port;
@@ -23,6 +27,7 @@ public class ChatServer {
         this.executor = Executors.newCachedThreadPool();
         this.activeUsernames = new ConcurrentHashMap<>();
         this.broadcastManager = new BroadcastManager();
+        this.messageStore = new SQLiteMessageStore("chat.db");
     }
 
     public ConcurrentHashMap<String, Boolean> getActiveUsernames() {
@@ -31,6 +36,10 @@ public class ChatServer {
 
     public BroadcastManager getBroadcastManager() {
         return broadcastManager;
+    }
+
+    public SQLiteMessageStore getMessageStore() {
+        return messageStore;
     }
 
     public void start() throws IOException {
