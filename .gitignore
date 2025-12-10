@@ -4,3 +4,13 @@
 # Ignore log files and database files
 *.log
 *.db
+chat.db
+
+# macOS system files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
