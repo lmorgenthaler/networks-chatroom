@@ -90,6 +90,7 @@ public class ClientHandler implements Runnable {
         
         if (requestedUsername.isEmpty()) {
             sendErrorResponse("Username cannot be empty");
+            System.out.println("[Client " + clientId + "] Join failed: empty username");
             return;
         }
 
@@ -98,6 +99,7 @@ public class ClientHandler implements Runnable {
         // Check if username is already taken
         if (usernames.putIfAbsent(requestedUsername, true) != null) {
             // Username already exists
+            System.out.println("[Client " + clientId + "] Join failed: username '" + requestedUsername + "' already taken");
             sendUsernameTakenResponse();
             return;
         }
@@ -267,7 +269,7 @@ public class ClientHandler implements Runnable {
         username = null; // Clear username to prevent cleanup() from broadcasting again
         
         // Remove client from broadcast manager before broadcasting
-        // (so they don't receive their own EXIT broadcast)
+        // (Client that leaves doesn't receive their own EXIT broadcast)
         server.getBroadcastManager().removeClient(this);
         
         // Remove username from active usernames set

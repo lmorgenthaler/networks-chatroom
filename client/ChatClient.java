@@ -165,40 +165,56 @@ public class ChatClient {
             // Wait for RESP
             ChatKLV.KLVMessage resp = waitForResponse();
             if (resp == null) {
-                return null;
+                throw new IOException("No response from server");
             }
 
             // Parse RESP value: contains concatenated CODE and MSGS KLV structures
             List<ChatKLV.KLVMessage> nested = parseNestedKLV(resp.value);
+            
+            // Check for CODE first
+            String code = null;
+            for (ChatKLV.KLVMessage n : nested) {
+                if (n.key.equals(ChatKLV.KEY_CODE)) {
+                    code = n.getValueAsString();
+                    break;
+                }
+            }
+            
+            if (code == null || !code.equals("200")) {
+                throw new IOException("Server error: " + (code != null ? code : "unknown"));
+            }
         
-        for (ChatKLV.KLVMessage n : nested) {
-            if (n.key.equals(ChatKLV.KEY_MSGS)) {
-                // Parse MSGS value: contains concatenated MSG KLV structures
-                List<ChatKLV.KLVMessage> msgs = parseNestedKLV(n.value);
-                List<Message> messages = new ArrayList<>();
-                
-                for (ChatKLV.KLVMessage msg : msgs) {
-                    if (msg.key.equals(ChatKLV.KEY_MSG)) {
-                        // Parse MSG value: contains concatenated FROM and BODY KLV structures
-                        List<ChatKLV.KLVMessage> msgFields = parseNestedKLV(msg.value);
-                        
-                        String from = null, body = null;
-                        for (ChatKLV.KLVMessage field : msgFields) {
-                            if (field.key.equals(ChatKLV.KEY_FROM)) {
-                                from = field.getValueAsString();
-                            } else if (field.key.equals(ChatKLV.KEY_BODY)) {
-                                body = field.getValueAsString();
+            // Look for MSGS field
+            for (ChatKLV.KLVMessage n : nested) {
+                if (n.key.equals(ChatKLV.KEY_MSGS)) {
+                    // Parse MSGS value: contains concatenated MSG KLV structures
+                    List<ChatKLV.KLVMessage> msgs = parseNestedKLV(n.value);
+                    List<Message> messages = new ArrayList<>();
+                    
+                    for (ChatKLV.KLVMessage msg : msgs) {
+                        if (msg.key.equals(ChatKLV.KEY_MSG)) {
+                            // Parse MSG value: contains concatenated FROM and BODY KLV structures
+                            List<ChatKLV.KLVMessage> msgFields = parseNestedKLV(msg.value);
+                            
+                            String from = null, body = null;
+                            for (ChatKLV.KLVMessage field : msgFields) {
+                                if (field.key.equals(ChatKLV.KEY_FROM)) {
+                                    from = field.getValueAsString();
+                                } else if (field.key.equals(ChatKLV.KEY_BODY)) {
+                                    body = field.getValueAsString();
+                                }
+                            }
+                            if (from != null && body != null) {
+                                messages.add(new Message(from, body));
                             }
                         }
-                        if (from != null && body != null) {
-                            messages.add(new Message(from, body));
-                        }
                     }
+                    return messages;
                 }
-                return messages;
             }
-        }
-        return new ArrayList<>(); // Empty history
+            
+            // No MSGS field means empty history
+            return new ArrayList<>();
         } catch (Exception e) {
             throw new IOException("Failed to read history: " + e.getMessage(), e);
         }
@@ -233,26 +249,62 @@ public class ChatClient {
      * @return RESP message, or null if timeout/error
      */
     private ChatKLV.KLVMessage waitForResponse() {
-        long timeout = System.currentTimeMillis() + 5000; // 5 second timeout
+        long timeout = System.currentTimeMillis() + 10000; // 10 second timeout (increased)
+        java.util.List<ChatKLV.KLVMessage> nonRespMessages = new java.util.ArrayList<>();
+        
         while (System.currentTimeMillis() < timeout) {
-            synchronized (messageQueue) {
-                ChatKLV.KLVMessage resp = messageQueue.poll();
-                if (resp != null && resp.key.equals(ChatKLV.KEY_RESP)) {
-                    return resp;
+            try {
+                // Calculate remaining timeout
+                long remaining = timeout - System.currentTimeMillis();
+                if (remaining <= 0) {
+                    break;
                 }
-                if (resp != null) {
-                    // Not a RESP, put it back
+                
+                // Use poll with remaining timeout
+                long pollTimeout = Math.min(remaining, 2000); // Poll in 2 second chunks
+                ChatKLV.KLVMessage msg = messageQueue.poll(pollTimeout, java.util.concurrent.TimeUnit.MILLISECONDS);
+                
+                if (msg == null) {
+                    // Timeout - continue waiting if we still have time
+                    continue;
+                }
+                
+                // Trim key for comparison (in case of whitespace issues)
+                String msgKey = msg.key.trim();
+                if (msgKey.equals(ChatKLV.KEY_RESP.trim())) {
+                    // Found RESP - put back any non-RESP messages we collected
+                    for (ChatKLV.KLVMessage nonResp : nonRespMessages) {
+                        try {
+                            messageQueue.put(nonResp); // Use put() instead of offer() to ensure it's added
+                        } catch (InterruptedException e) {
+                            // Shouldn't happen, but handle it
+                            break;
+                        }
+                    }
+                    return msg;
+                } else {
+                    // Not a RESP, save it to put back later
+                    nonRespMessages.add(msg);
+                }
+            } catch (InterruptedException e) {
+                // Put back any non-RESP messages we collected
+                for (ChatKLV.KLVMessage nonResp : nonRespMessages) {
                     try {
-                        messageQueue.put(resp);
-                    } catch (InterruptedException e) {
+                        messageQueue.put(nonResp);
+                    } catch (InterruptedException ie) {
                         break;
                     }
                 }
-                try {
-                    messageQueue.wait(1000); // Wait 1 second
-                } catch (InterruptedException e) {
-                    break;
-                }
+                break;
+            }
+        }
+        
+        // Timeout - put back any non-RESP messages we collected
+        for (ChatKLV.KLVMessage nonResp : nonRespMessages) {
+            try {
+                messageQueue.put(nonResp);
+            } catch (InterruptedException e) {
+                // Ignore
             }
         }
         return null;
